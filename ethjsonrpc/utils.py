@@ -1,7 +1,7 @@
 from typing import Optional
 
 from starknet_py.contract import Contract
-from starknet_py.net import AccountClient
+from starknet_py.net.account.account import Account
 from starknet_py.net.client import Client
 from starknet_py.net.client_models import Call
 from starknet_py.net.gateway_client import GatewayClient
@@ -69,10 +69,9 @@ def get_account(address=None, private_key=None):
         address is not None and private_key is None
     ):
         raise ValueError("address and private_key should both None or not None")
-    return AccountClient(
+    return Account(
         address=address or ACCOUNT_ADDRESS,
         client=GatewayClient(net=GATEWAY_URL),
-        supported_tx_version=1,
         chain=STARKNET_CHAIN_ID,
         key_pair=KeyPair.from_private_key(int(private_key or PRIVATE_KEY, 16)),
     )

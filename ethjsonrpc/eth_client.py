@@ -8,11 +8,11 @@ from eth.vm.forks.london.transactions import (
 )
 from hexbytes import HexBytes
 from starknet_py.contract import Contract
-from starknet_py.net import AccountClient
-from starknet_py.net.account.account import _execute_payload_serializer
+from starknet_py.net.account.account import Account, _execute_payload_serializer
 from starknet_py.net.client_errors import ContractNotFoundError
 from starknet_py.net.client_models import Call, Tag, TransactionStatus
 from starknet_py.net.gateway_client import GatewayClient
+from starknet_py.transaction_exceptions import TransactionNotReceivedError
 from starkware.starknet.public.abi import get_selector_from_name
 
 from ethjsonrpc.constants import (
@@ -35,7 +35,6 @@ logger.setLevel(logging.INFO)
 
 @dataclass
 class EthClient:
-
     starknet_gateway: GatewayClient
     eth_contract: Contract
     kakarot_contract: Contract
@@ -54,7 +53,7 @@ class EthClient:
             )
         ).contract_address
 
-    async def get_eoa(self, evm_address) -> AccountClient:
+    async def get_eoa(self, evm_address) -> Account:
         starknet_address = await self.compute_starknet_address(evm_address)
         try:
             await self.starknet_gateway.get_code(starknet_address)
@@ -70,7 +69,7 @@ class EthClient:
                 await rpc_account.execute(call, max_fee=int(1e16))
             ).transaction_hash
             logger.info(f"⏳ Waiting for tx {get_explorer_url('tx', tx_hash)}")
-            await rpc_account.wait_for_tx(tx_hash)
+            await self.starknet_gateway.wait_for_tx(tx_hash)
         return get_account(starknet_address, "0xdead")
 
     def starknet_block_to_eth_block(self, block, transactions: bool):
@@ -233,7 +232,10 @@ class EthClient:
         return self.starknet_block_to_eth_block(block, transactions)
 
     async def eth_getTransactionReceipt(self, tx_hash):
-        starknet_tx = await self.starknet_gateway.get_transaction(tx_hash)
+        try:
+            starknet_tx = await self.starknet_gateway.get_transaction(tx_hash)
+        except TransactionNotReceivedError:
+            return
         tx = bytes(
             _execute_payload_serializer.deserialize(starknet_tx.calldata).calldata
         )
@@ -296,34 +298,35 @@ class EthClient:
             return "0x"
 
     async def eth_getTransactionByHash(self, tx_hash):
-
         try:
-            tx = await self.starknet_gateway.get_transaction(tx_hash)
-            call = Call(
-                to_addr=tx.contract_address,
-                selector=get_selector_from_name("get_evm_address"),
-                calldata=[],
-            )
-            sender = hex((await self.starknet_gateway.call_contract(call))[0])
-        except:
+            starknet_tx = await self.starknet_gateway.get_transaction(tx_hash)
+        except TransactionNotReceivedError:
             return
-
+        tx = bytes(
+            _execute_payload_serializer.deserialize(starknet_tx.calldata).calldata
+        )
+        is_legacy = self.is_legacy_tx(tx)
+        if is_legacy:
+            decoded_tx = LondonLegacyTransaction.decode(tx)
+        else:
+            decoded_tx = LondonTypedTransaction.decode(tx)
+        receipt = await self.starknet_gateway.get_transaction_receipt(tx_hash)
         receipt = await self.starknet_gateway.get_transaction_receipt(tx_hash)
         return {
             "blockHash": hex(receipt.block_hash or 0),
             "blockNumber": hex(receipt.block_number or 0),
-            "from": sender,
-            "gas": "0xc350",
-            "gasPrice": "0x4a817c800",
-            "hash": "0x88df016429689c079f3b2f6ad39fa052532c56795b733da78a91ebe6a713944b",
+            "from": decoded_tx.sender.hex(),
+            "gas": decoded_tx.gas,
+            "gasPrice": decoded_tx.gas_price,
+            "hash": decoded_tx.hash,
             "input": "0x68656c6c6f21",
             "nonce": "0x15",
-            "to": "0xf02c1c8e6114b1dbe8937a39260b5b0a374432bb",
+            "to": decoded_tx.to.hex(),
             "transactionIndex": "0x41",
-            "value": "0xf3dbb76162000",
-            "v": "0x25",
-            "r": "0x1b5e176d927f8e9ab405058b2d2457392da3e20f328b16ddabcebc33eaac5fea",
-            "s": "0x4ba69724e8f69de52f0125ad8b3c5c2cef33019bac3249e2c0a2192766d1721c",
+            "value": decoded_tx.value,
+            "v": decoded_tx.y_parity,
+            "r": decoded_tx.r,
+            "s": decoded_tx.s,
         }
 
     async def web3_clientVersion(self):

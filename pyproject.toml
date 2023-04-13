@@ -7,8 +7,8 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.10"
-cairo-lang = "^0.10.1"
-starknet-py = "0.14.0a0"
+cairo-lang = "^0.11"
+starknet-py = "^0.15.2"
 fastapi = "^0.94.1"
 pydantic = "^1.10.6"
 uvicorn = "^0.21.0"
