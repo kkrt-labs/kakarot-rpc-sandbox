@@ -79,7 +79,3 @@ devnet as the Starknet network.
 ## Reference
 
 - [JSON-RPC wiki](https://github.com/ethereum/wiki/wiki/JSON-RPC)
-
-```
-
-```
