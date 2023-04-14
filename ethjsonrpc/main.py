@@ -1,5 +1,7 @@
 import json
 import logging
+import subprocess
+import time
 from typing import List, Optional, Union
 
 import requests
@@ -12,14 +14,71 @@ from starlette.concurrency import iterate_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from ethjsonrpc.constants import GATEWAY_URL
+from ethjsonrpc.constants import GATEWAY_URL, STARKNET_NETWORK
 from ethjsonrpc.eth_client import EthClient
 
 load_dotenv()
 
-logging.basicConfig()
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+
+# Set up custom logging formatter
+class CustomFormatter(logging.Formatter):
+    def format(self, record):
+        level_color_map = {
+            "INFO": "\033[32m",
+            "WARNING": "\033[33m",
+            "ERROR": "\033[31m",
+            "CRITICAL": "\033[31;1m",
+            "DEBUG": "\033[37m",
+        }
+        color_prefix = level_color_map.get(record.levelname, "")
+        color_suffix = "\033[0m" if color_prefix else ""
+        formatted_msg = (
+            f"{color_prefix}{record.levelname: <9}{color_suffix} {record.getMessage()}"
+        )
+        return formatted_msg
+
+
+handler = logging.StreamHandler()
+handler.setFormatter(CustomFormatter())
+logger = logging.getLogger("uvicorn")
+logger.handlers = [handler]
+logger.setLevel(logging.INFO)
+
+# Run a devnet if it is not already started elsewhere (e.g. docker)
+if STARKNET_NETWORK == "devnet":
+    try:
+        response = requests.get(f"{GATEWAY_URL}/is_alive")
+        if response.status_code != 200:
+            raise ValueError(
+                "Devnet port is used but devnet 'is_alive' is not returning 200"
+            )
+    except requests.exceptions.ConnectionError:
+        logger.info(f"⏳ Starting devnet in background")
+        devnet = subprocess.Popen(
+            [
+                "starknet-devnet",
+                "--seed",
+                "0",
+                "--disable-rpc-request-validation",
+                "--load-path",
+                "deployments/devnet/devnet.pkl",
+            ],
+            stdout=subprocess.PIPE,
+        )
+        is_alive = False
+        attempts = 0
+        max_retries = 10
+        while not is_alive and attempts < max_retries:
+            try:
+                response = requests.get(f"{GATEWAY_URL}/is_alive")
+                is_alive = response.status_code == 200
+            except:
+                time.sleep(1)
+            finally:
+                attempts += 1
+        if not is_alive:
+            raise ValueError(f"starknet-devnet failed to initialize in {max_retries}s")
+    logger.info(f"✅ Devnet running in background")
 
 
 class RequestContextLogMiddleware(BaseHTTPMiddleware):

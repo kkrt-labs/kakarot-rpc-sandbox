@@ -37,8 +37,9 @@ based on:
 - testnet2
 - devnet (default)
 
-The default value requires a devnet to run locally. To start the devnet, just
-run:
+The default value requires a devnet to run locally. By default, it will spawn a
+devnet using `subprocess.Popen`. You can also use Docker to run the Kakarot
+devnet image **before** starting the server:
 
 ```bash
 docker pull ghcr.io/sayajin-labs/kakarot/devnet:latest
@@ -74,7 +75,11 @@ display the `Ethjsonrpc` configuration.
 - eth_accounts
 
 A `/mint` route is added to mint ETH to the given EVM address when using the
-devnet as the Starknet network.
+devnet as the Starknet network:
+
+```bash
+curl http://127.0.0.1:8000/mint -H 'Content-Type: application/json' -d '{"address": "0xc0ffee", "amount": 1234}'
+```
 
 ## Reference
 
