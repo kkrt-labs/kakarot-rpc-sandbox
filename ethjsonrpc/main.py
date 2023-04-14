@@ -62,6 +62,8 @@ if STARKNET_NETWORK == "devnet":
                 "--disable-rpc-request-validation",
                 "--load-path",
                 "deployments/devnet/devnet.pkl",
+                "--timeout",
+                "300",
             ],
             stdout=subprocess.PIPE,
         )
