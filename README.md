@@ -35,19 +35,14 @@ based on:
 - mainnet
 - testnet
 - testnet2
-- devnet (default)
+- devnet
+- katana (default)
 
-The default value requires a devnet to run locally. By default, it will spawn a
-devnet using `subprocess.Popen`. You can also use Docker to run the Kakarot
-devnet image **before** starting the server:
-
-```bash
-docker pull ghcr.io/sayajin-labs/kakarot/devnet:latest
-docker run -p 5050:5050 ghcr.io/sayajin-labs/kakarot/devnet:latest
-```
-
-Note: be sure to pull before starting the container to make sure you have the
-latest image version, otherwise downloaded artifacts won't match.
+The default value requires a devnet to run locally. If you intend to run the
+node using Katana as a backend,
+[be sure to run it](https://book.dojoengine.org/framework/katana/overview.html)
+and deploy kakarot following the doc in the
+[Kakarot main repo](https://github.com/kkrt-labs/kakarot/blob/main/README.md#deploy).
 
 VS-code users: the `.vscode` folder defines a `launch.json` config file that is
 interpreter by VS Code. Simple go to the "Run and Debug" tab and it should
@@ -74,8 +69,8 @@ display the `Ethjsonrpc` configuration.
 - eth_sendTransaction
 - eth_accounts
 
-A `/mint` route is added to mint ETH to the given EVM address when using the
-devnet as the Starknet network:
+A `/mint` route is added to mint ETH to the given EVM address when using a
+devnet (katana or starknet-devnet) as the Starknet network:
 
 ```bash
 curl http://127.0.0.1:8000/mint -H 'Content-Type: application/json' -d '{"address": "0xc0ffee", "amount": 1234}'

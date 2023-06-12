@@ -14,8 +14,9 @@ from starlette.concurrency import iterate_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from ethjsonrpc.constants import GATEWAY_URL, STARKNET_NETWORK
+from ethjsonrpc.constants import NETWORK, RPC_CLIENT
 from ethjsonrpc.eth_client import EthClient
+from ethjsonrpc.utils import chain_id
 
 load_dotenv()
 
@@ -45,14 +46,10 @@ logger.handlers = [handler]
 logger.setLevel(logging.INFO)
 
 # Run a devnet if it is not already started elsewhere (e.g. docker)
-if STARKNET_NETWORK == "devnet":
+if NETWORK in ["katana", "devnet"]:
     try:
-        response = requests.get(f"{GATEWAY_URL}/is_alive")
-        if response.status_code != 200:
-            raise ValueError(
-                "Devnet port is used but devnet 'is_alive' is not returning 200"
-            )
-    except requests.exceptions.ConnectionError:
+        chain_id()
+    except:
         logger.info(f"⏳ Starting devnet in background")
         devnet = subprocess.Popen(
             [
@@ -64,7 +61,9 @@ if STARKNET_NETWORK == "devnet":
                 "deployments/devnet/devnet.pkl",
                 "--timeout",
                 "300",
-            ],
+            ]
+            if NETWORK == "devnet"
+            else ["katana"],
             stdout=subprocess.PIPE,
         )
         is_alive = False
@@ -72,15 +71,14 @@ if STARKNET_NETWORK == "devnet":
         max_retries = 10
         while not is_alive and attempts < max_retries:
             try:
-                response = requests.get(f"{GATEWAY_URL}/is_alive")
-                is_alive = response.status_code == 200
+                chain_id()
             except:
                 time.sleep(1)
             finally:
                 attempts += 1
         if not is_alive:
-            raise ValueError(f"starknet-devnet failed to initialize in {max_retries}s")
-    logger.info(f"✅ Devnet running in background")
+            raise ValueError(f"{NETWORK} failed to initialize in {max_retries}s")
+    logger.info(f"✅ {NETWORK} running in background")
 
 
 class RequestContextLogMiddleware(BaseHTTPMiddleware):
@@ -129,7 +127,7 @@ app = FastAPI(middleware=middleware)
 @app.on_event("startup")
 async def get_client():
     global eth_client
-    eth_client = await EthClient.new(GATEWAY_URL)
+    eth_client = await EthClient.new(RPC_CLIENT)
 
 
 class Payload(BaseModel):
@@ -169,12 +167,26 @@ async def main(payload: Payload) -> Result:
 
 @app.post("/mint")
 async def mint(payload: MintRequest) -> MintResponse:
+    if NETWORK not in ["devnet", "katana"]:
+        raise ValueError("Cannot mint when not in devnet")
     starknet_address = await eth_client.compute_starknet_address(payload.address)
-    response = requests.post(
-        f"{eth_client.starknet_gateway.net}/mint",
-        json={"address": hex(starknet_address), "amount": payload.amount},
+    rpc_balance = (
+        await eth_client.eth_contract.functions["balanceOf"].call(
+            eth_client.eth_contract.account.address
+        )
+    ).balance / 1e18
+    if rpc_balance < payload.amount:
+        raise ValueError(
+            f"Requested amount ({payload.amount} ETH) > rpc account balance ({rpc_balance} ETH)"
+        )
+    tx = await eth_client.eth_contract.functions["transfer"].invoke(
+        starknet_address, int(payload.amount * 1e18), max_fee=int(1e17)
     )
-    return MintResponse(**response.json())
+    await eth_client.rpc_client.wait_for_tx(tx.hash)
+    new_balance = (
+        await eth_client.eth_contract.functions["balanceOf"].call(starknet_address)
+    ).balance / 1e18
+    return MintResponse(new_balance=new_balance, tx_hash=hex(tx.hash), unit="ETH")
 
 
 @app.options("/")
