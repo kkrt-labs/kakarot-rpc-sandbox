@@ -9,10 +9,10 @@ from eth.vm.forks.london.transactions import (
 from hexbytes import HexBytes
 from starknet_py.contract import Contract
 from starknet_py.net.account.account import Account, _execute_payload_serializer
-from starknet_py.net.client_errors import ContractNotFoundError
+from starknet_py.net.client_errors import ClientError
 from starknet_py.net.client_models import Call, Tag, TransactionStatus
-from starknet_py.net.gateway_client import GatewayClient
-from starknet_py.transaction_exceptions import TransactionNotReceivedError
+from starknet_py.net.full_node_client import FullNodeClient
+from starknet_py.transaction_errors import TransactionNotReceivedError
 from starkware.starknet.public.abi import get_selector_from_name
 
 from ethjsonrpc.constants import (
@@ -35,16 +35,16 @@ logger.setLevel(logging.INFO)
 
 @dataclass
 class EthClient:
-    starknet_gateway: GatewayClient
+    rpc_client: FullNodeClient
     eth_contract: Contract
     kakarot_contract: Contract
 
     @staticmethod
-    async def new(starknet_gateway_url: str):
-        starknet_gateway = GatewayClient(net=starknet_gateway_url)
-        eth_contract = await get_eth_contract(starknet_gateway)
-        kakarot_contract = await get_kakarot_contract(starknet_gateway)
-        return EthClient(starknet_gateway, eth_contract, kakarot_contract)
+    async def new(rpc_client: FullNodeClient):
+        rpc_account = get_account()
+        eth_contract = await get_eth_contract(rpc_account)
+        kakarot_contract = await get_kakarot_contract(rpc_account)
+        return EthClient(rpc_client, eth_contract, kakarot_contract)
 
     async def compute_starknet_address(self, evm_address: str):
         return (
@@ -56,8 +56,8 @@ class EthClient:
     async def get_eoa(self, evm_address) -> Account:
         starknet_address = await self.compute_starknet_address(evm_address)
         try:
-            await self.starknet_gateway.get_code(starknet_address)
-        except ContractNotFoundError:
+            await self.rpc_client.get_class_hash_at(starknet_address)
+        except ClientError:
             logger.info("ℹ️  EAO not deployed yet, deploying...")
             rpc_account = get_account()
             call = Call(
@@ -69,7 +69,7 @@ class EthClient:
                 await rpc_account.execute(call, max_fee=int(1e16))
             ).transaction_hash
             logger.info(f"⏳ Waiting for tx {get_explorer_url('tx', tx_hash)}")
-            await self.starknet_gateway.wait_for_tx(tx_hash)
+            await self.rpc_client.wait_for_tx(tx_hash)
         return get_account(starknet_address, "0xdead")
 
     def starknet_block_to_eth_block(self, block, transactions: bool):
@@ -125,7 +125,7 @@ class EthClient:
     async def eth_feeHistory(
         self, block_count: str, block_number: str, percentiles: List[int]
     ):
-        block = await self.starknet_gateway.get_block(
+        block = await self.rpc_client.get_block(
             block_number=self.get_block_number(block_number)
         )
         block_count_int = int(block_count, 16)
@@ -140,14 +140,14 @@ class EthClient:
 
     async def eth_blockNumber(self) -> str:
         return hex(
-            (await self.starknet_gateway.get_block(block_number="latest")).block_number
+            (await self.rpc_client.get_block(block_number="latest")).block_number
         )
 
     async def eth_getBalance(self, evm_address, block_number) -> str:
         starknet_address = await self.compute_starknet_address(evm_address)
 
         block_hash = (
-            await self.starknet_gateway.get_block(
+            await self.rpc_client.get_block(
                 block_number=self.get_block_number(block_number)
             )
         ).block_hash
@@ -162,11 +162,11 @@ class EthClient:
     async def eth_getTransactionCount(self, evm_address, block_number) -> str:
         eoa = await self.get_eoa(evm_address)
         block_hash = (
-            await self.starknet_gateway.get_block(
+            await self.rpc_client.get_block(
                 block_number=self.get_block_number(block_number)
             )
         ).block_hash
-        nonce = await self.starknet_gateway.get_contract_nonce(
+        nonce = await self.rpc_client.get_contract_nonce(
             eoa.address, block_hash=block_hash
         )
         return hex(nonce)
@@ -185,8 +185,8 @@ class EthClient:
             selector=0xDEAD,
             calldata=list(tx),
         )
-        receipt = await eoa.execute(call, max_fee=int(1e20))
-        receipt = await self.starknet_gateway.get_transaction_receipt(
+        receipt = await eoa.execute(call, max_fee=int(1e17))
+        receipt = await self.rpc_client.get_transaction_receipt(
             receipt.transaction_hash
         )
         if receipt.status == TransactionStatus.REJECTED:
@@ -197,7 +197,7 @@ class EthClient:
 
     async def eth_call(self, tx, block_number) -> str:
         block_hash = (
-            await self.starknet_gateway.get_block(
+            await self.rpc_client.get_block(
                 block_number=self.get_block_number(block_number)
             )
         ).block_hash
@@ -222,18 +222,18 @@ class EthClient:
         return hex(21_000)
 
     async def eth_getBlockByHash(self, block_hash: str, transactions: bool) -> dict:
-        block = await self.starknet_gateway.get_block(block_hash=block_hash)
+        block = await self.rpc_client.get_block(block_hash=block_hash)
         return self.starknet_block_to_eth_block(block, transactions)
 
     async def eth_getBlockByNumber(self, block_number: str, transactions: bool) -> dict:
-        block = await self.starknet_gateway.get_block(
+        block = await self.rpc_client.get_block(
             block_number=self.get_block_number(block_number)
         )
         return self.starknet_block_to_eth_block(block, transactions)
 
     async def eth_getTransactionReceipt(self, tx_hash):
         try:
-            starknet_tx = await self.starknet_gateway.get_transaction(tx_hash)
+            starknet_tx = await self.rpc_client.get_transaction(tx_hash)
         except TransactionNotReceivedError:
             return
         tx = bytes(
@@ -244,7 +244,7 @@ class EthClient:
             decoded_tx = LondonLegacyTransaction.decode(tx)
         else:
             decoded_tx = LondonTypedTransaction.decode(tx)
-        receipt = await self.starknet_gateway.get_transaction_receipt(tx_hash)
+        receipt = await self.rpc_client.get_transaction_receipt(tx_hash)
         contract_address = (
             hex(
                 [
@@ -284,22 +284,19 @@ class EthClient:
 
     async def eth_getCode(self, evm_address, block_number):
         starknet_address = await self.compute_starknet_address(evm_address)
-        try:
-            call = Call(
-                to_addr=starknet_address,
-                selector=get_selector_from_name("bytecode"),
-                calldata=[],
-            )
-            bytecode = await self.starknet_gateway.call_contract(
-                call, block_number=self.get_block_number(block_number)
-            )
-            return "0x" + bytes(bytecode[1:]).hex()
-        except:
-            return "0x"
+        call = Call(
+            to_addr=starknet_address,
+            selector=get_selector_from_name("bytecode"),
+            calldata=[],
+        )
+        bytecode = await self.rpc_client.call_contract(
+            call, block_number=self.get_block_number(block_number)
+        )
+        return "0x" + bytes(bytecode[1:]).hex()
 
     async def eth_getTransactionByHash(self, tx_hash):
         try:
-            starknet_tx = await self.starknet_gateway.get_transaction(tx_hash)
+            starknet_tx = await self.rpc_client.get_transaction(tx_hash)
         except TransactionNotReceivedError:
             return
         tx = bytes(
@@ -310,8 +307,7 @@ class EthClient:
             decoded_tx = LondonLegacyTransaction.decode(tx)
         else:
             decoded_tx = LondonTypedTransaction.decode(tx)
-        receipt = await self.starknet_gateway.get_transaction_receipt(tx_hash)
-        receipt = await self.starknet_gateway.get_transaction_receipt(tx_hash)
+        receipt = await self.rpc_client.get_transaction_receipt(tx_hash)
         return {
             "blockHash": hex(receipt.block_hash or 0),
             "blockNumber": hex(receipt.block_number or 0),
